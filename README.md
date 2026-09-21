@@ -128,7 +128,9 @@ Global guardrails (see [config/autonomy_policy.yaml](config/autonomy_policy.yaml
 
 ## Audit trail
 
-An append-only, newline-delimited JSON log under `logs/`. Each record carries a run id, timestamp, step, the objects involved and a hash of the previous record, so tampering or truncation is detectable. Records are never updated or deleted; a rollback is recorded as a new event.
+[agent/auditor.py](agent/auditor.py) writes an append-only, newline-delimited JSON log (`logs/audit.jsonl`). The first record is metadata (including the declared `retention_policy_days`, default 365); every record carries its position and the hash of the previous one, so modification, removal or reordering is detectable. `Auditor.verify_chain_integrity()` recomputes the chain and returns the index of the first corrupt record, `export_evidence(start, end)` extracts the entries of a time interval, and a log that fails verification is never appended to. A rollback is recorded as a new event; records are never updated or deleted.
+
+The design is aligned with the logging and evidence controls of ISO/IEC 27001:2022 (A.8.15, A.5.28, A.5.33); see [docs/iso27001_mapping.md](docs/iso27001_mapping.md) for what is covered and which limits remain.
 
 ## Baseline controls
 
@@ -155,11 +157,12 @@ agent/        Pipeline implementation: assessor, planner, policy engine, remedia
 tools/        Typed, allow-listed adapters used to check and change the testbed (docker, ssh, modbus, files) with snapshot and rollback
 experiments/  Scenario definitions and runners; results go to experiments/results/ (git-ignored)
 tests/        Unit and integration tests
+docs/         Documentation, e.g. the ISO/IEC 27001 mapping of the Auditor
 scripts/      Helper scripts (testbed up/down, fault injection, report generation)
 logs/         Runtime logs and audit trail (git-ignored)
 ```
 
-Implemented so far: `config/`, `agent/` (data models, risk taxonomy, deployment profile, LLM client) and `tests/`; the other directories are planned.
+Implemented so far: `config/`, `agent/` (data models, risk taxonomy, deployment profile, LLM client, auditor), `docs/` and `tests/`; the other directories are planned.
 
 ## Getting started
 
