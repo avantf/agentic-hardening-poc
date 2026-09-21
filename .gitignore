@@ -1,0 +1,31 @@
+# Virtualenv
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Secrets / environment
+.env
+.env.*
+!.env.example
+
+# Logs and experiment output
+logs/
+*.log
+experiments/results/
+
+# Docker
+docker-compose.override.yml
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

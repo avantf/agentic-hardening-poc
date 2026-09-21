@@ -1,0 +1,133 @@
+# Risk / reversibility taxonomy of remediation actions.
+#
+# The PolicyEngine classifies every Action proposed by the Planner by looking up
+# its action_class here. The risk tier is NEVER supplied by the Planner: it is
+# derived deterministically from (impact, reversibility) through risk_matrix.
+#
+# Fields per action class
+#   impact           Operational impact if the action goes wrong or has side effects:
+#                    low | medium | high
+#   reversibility    Whether the pre-action state can be restored:
+#                    reversible | partially_reversible | irreversible
+#   rollback_strategy
+#     type           Identifier of the rollback procedure implemented in tools/.
+#     description    What is snapshotted before the action and how it is restored.
+#
+# Every action class must define a rollback strategy: an action without one
+# cannot be executed at any autonomy level.
+
+schema_version: 1
+
+impact_levels: [low, medium, high]
+reversibility_levels: [reversible, partially_reversible, irreversible]
+
+tiers:
+  T1: { label: minimal,  description: Trivial impact and fully reversible }
+  T2: { label: low,      description: Limited impact or restorable with minor side effects }
+  T3: { label: moderate, description: Noticeable impact or only partially restorable }
+  T4: { label: high,     description: Significant operational impact and hard to restore }
+  T5: { label: critical, description: Severe and irreversible impact }
+
+# Applied to any action_class not listed below (fail-safe).
+unclassified_action_tier: T5
+
+action_classes:
+  restrict_file_permissions:
+    description: Tighten owner/mode of a sensitive file
+    impact: low
+    reversibility: reversible
+    rollback_strategy:
+      type: restore_file_metadata
+      description: Snapshot owner and mode of the file; restore them with chown/chmod.
+
+  rotate_credential:
+    description: Replace a default or weak credential with a newly generated one
+    impact: low
+    reversibility: partially_reversible
+    rollback_strategy:
+      type: restore_secret_snapshot
+      description: >
+        Snapshot the previous credential record (hash or config entry) in the
+        secret store; restore it on rollback. Sessions opened with the new
+        credential are invalidated.
+
+  close_exposed_port:
+    description: Remove a port mapping or firewall exposure of an administrative port
+    impact: medium
+    reversibility: reversible
+    rollback_strategy:
+      type: restore_network_rule
+      description: Snapshot published ports / firewall rules of the service; re-apply them.
+
+  change_auth_policy:
+    description: Tighten application authentication policy (lockout, password rules)
+    impact: medium
+    reversibility: reversible
+    rollback_strategy:
+      type: restore_config_file
+      description: Snapshot the policy configuration; restore it and reload the service.
+
+  change_ssh_policy:
+    description: Change sshd settings (e.g. disable password authentication)
+    impact: medium
+    reversibility: reversible
+    rollback_strategy:
+      type: restore_config_file
+      description: >
+        Snapshot sshd_config; validate the new file with sshd -t before reload;
+        restore the snapshot and reload sshd on rollback.
+
+  update_crypto_config:
+    description: Replace weak TLS/crypto configuration (certificate, protocol, algorithms)
+    impact: medium
+    reversibility: reversible
+    rollback_strategy:
+      type: restore_config_file
+      description: Snapshot the TLS configuration and certificate files; restore them and reload.
+
+  apply_package_update:
+    description: Upgrade a package to a non-vulnerable version
+    impact: medium
+    reversibility: partially_reversible
+    rollback_strategy:
+      type: restore_container_image
+      description: >
+        Tag the current image before the update and recreate the container from
+        it on rollback. Data written to non-persistent layers after the update is lost.
+
+  change_ot_write_protection:
+    description: Enable write protection on OT registers/coils of a controller
+    impact: high
+    reversibility: partially_reversible
+    rollback_strategy:
+      type: restore_ot_config
+      description: >
+        Snapshot the controller write-protection configuration and register map
+        access flags; restore them on rollback. Write attempts denied in the
+        meantime are not replayed.
+
+  remove_privileged_mode:
+    description: Recreate a container without the privileged flag
+    impact: high
+    reversibility: partially_reversible
+    rollback_strategy:
+      type: restore_container_spec
+      description: >
+        Persist the original container specification (docker inspect) and named
+        volumes; recreate the container from it on rollback. State held only in
+        the container filesystem is lost.
+
+# risk_matrix[impact][reversibility] -> risk tier
+risk_matrix:
+  low:
+    reversible: T1
+    partially_reversible: T2
+    irreversible: T3
+  medium:
+    reversible: T2
+    partially_reversible: T3
+    irreversible: T4
+  high:
+    reversible: T3
+    partially_reversible: T4
+    irreversible: T5

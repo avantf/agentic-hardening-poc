@@ -1,0 +1,137 @@
+# Baseline hardening controls.
+#
+# Each control describes a desired state of a testbed service. The Assessor
+# evaluates every control against the running testbed and emits a Finding for
+# each deviation.
+#
+# Fields
+#   id                       Stable identifier, referenced by Findings and the audit trail.
+#   title                    Human-readable statement of the desired state.
+#   source                   Reference standard(s). Documentary label only: it is NOT used
+#                            by the agent and does not claim a verified control-by-control mapping.
+#   target_service           Testbed service the control applies to ("*" = every container).
+#   check_type               Name of the Assessor check implementation (see agent/ and tools/).
+#   params                   Check-specific parameters, including the expected value.
+#   allowed_action_classes   action_class values (see risk_taxonomy.yaml) the Planner may
+#                            propose for this control. Anything else is rejected by the PolicyEngine.
+#
+# Testbed services referenced here:
+#   hmi-web        Operator web HMI (IT/OT boundary, TLS + login)
+#   plc-sim        Modbus/TCP PLC simulator (OT)
+#   jump-host      SSH bastion between IT and OT networks
+#   historian-db   Process data historian (database)
+
+schema_version: 1
+
+controls:
+  - id: BC-001
+    title: Default credentials must not be accepted by the operator HMI
+    source: CIS Controls v8 (4.7); IEC 62443-3-3 (SR 1.5)
+    target_service: hmi-web
+    check_type: default_credentials
+    params:
+      login_endpoint: /api/login
+      candidates:
+        - { username: admin, password: admin }
+        - { username: admin, password: password }
+        - { username: operator, password: operator }
+      expected: all_rejected
+    allowed_action_classes: [rotate_credential]
+
+  - id: BC-002
+    title: Administrative management ports must not be reachable from the IT network
+    source: CIS Controls v8 (4.4); IEC 62443-3-3 (SR 5.2)
+    target_service: hmi-web
+    check_type: exposed_ports
+    params:
+      admin_ports:
+        - { port: 9000, protocol: tcp, description: management console }
+        - { port: 8081, protocol: tcp, description: debug interface }
+      forbidden_from_networks: [it_net, dmz_net]
+      expected: not_reachable
+    allowed_action_classes: [close_exposed_port]
+
+  - id: BC-003
+    title: TLS certificates must not use weak signature algorithms
+    source: CIS Controls v8 (3.10); IEC 62443-3-3 (SR 4.3)
+    target_service: hmi-web
+    check_type: tls_config
+    params:
+      port: 443
+      min_tls_version: "1.2"
+      min_rsa_key_bits: 2048
+      disallowed_signature_algorithms:
+        - md5WithRSAEncryption
+        - sha1WithRSAEncryption
+      expected: no_disallowed_algorithms
+    allowed_action_classes: [update_crypto_config]
+
+  - id: BC-004
+    title: Write access to protected Modbus registers must be denied
+    source: IEC 62443-3-3 (SR 2.1); IEC 62443-4-2 (CR 2.1)
+    target_service: plc-sim
+    check_type: modbus_write_protection
+    params:
+      port: 502
+      unit_id: 1
+      protected_holding_registers: { start: 0, count: 16 }
+      protected_coils: { start: 0, count: 8 }
+      expected: write_denied
+    allowed_action_classes: [change_ot_write_protection]
+
+  - id: BC-005
+    title: SSH password authentication must be disabled
+    source: CIS Benchmark for Linux (SSH Server Configuration); CIS Controls v8 (5.2)
+    target_service: jump-host
+    check_type: config_file_value
+    params:
+      path: /etc/ssh/sshd_config
+      key: PasswordAuthentication
+      expected: "no"
+    allowed_action_classes: [change_ssh_policy]
+
+  - id: BC-006
+    title: HMI accounts must lock after repeated failed logins
+    source: IEC 62443-3-3 (SR 1.11); CIS Controls v8 (5.2)
+    target_service: hmi-web
+    check_type: auth_policy
+    params:
+      endpoint: /api/policy/auth
+      max_failed_attempts: 5
+      min_lockout_seconds: 300
+      min_password_length: 12
+      expected: policy_meets_minimum
+    allowed_action_classes: [change_auth_policy]
+
+  - id: BC-007
+    title: Containers must not run in privileged mode
+    source: CIS Docker Benchmark (5.4)
+    target_service: "*"
+    check_type: container_inspect
+    params:
+      field: HostConfig.Privileged
+      expected: false
+    allowed_action_classes: [remove_privileged_mode]
+
+  - id: BC-008
+    title: Historian configuration files must not be readable by other users
+    source: CIS Benchmark for Linux (File Permissions); CIS Controls v8 (3.3)
+    target_service: historian-db
+    check_type: file_permissions
+    params:
+      path: /etc/historian/historian.conf
+      max_mode: "0640"
+      expected_owner: root
+    allowed_action_classes: [restrict_file_permissions]
+
+  - id: BC-009
+    title: Installed packages must not include known-vulnerable versions
+    source: CIS Controls v8 (7.4); IEC 62443-2-3 (patch management)
+    target_service: hmi-web
+    check_type: vulnerable_package
+    params:
+      packages:
+        - { name: openssl, min_safe_version: "3.0.13" }
+        - { name: nginx, min_safe_version: "1.24.0" }
+      expected: all_at_or_above_min_safe_version
+    allowed_action_classes: [apply_package_update]

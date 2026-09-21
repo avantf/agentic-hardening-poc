@@ -1,0 +1,75 @@
+# Graduated autonomy policy.
+#
+# For each autonomy level the PolicyEngine decides, given the risk tier of an
+# Action (see risk_taxonomy.yaml), one of:
+#   auto_execute   tier is in auto_execute_tiers
+#   needs_approval tier is not auto-executable and require_approval is true
+#   block          tier is not auto-executable and require_approval is false,
+#                  or a global guardrail forbids it
+#
+# global_guardrails apply on top of every level and always win over the level
+# settings: a level can never loosen a guardrail.
+
+schema_version: 1
+
+# Level used when none is specified on the command line.
+default_level: L1
+
+levels:
+  L0:
+    name: observe
+    description: >
+      Log-only. Findings and proposed actions are recorded in the audit trail;
+      nothing is executed and no approval requests are raised.
+    auto_execute_tiers: []
+    require_approval: false
+
+  L1:
+    name: recommend
+    description: >
+      The agent proposes actions; every one requires human approval before
+      execution.
+    auto_execute_tiers: []
+    require_approval: true
+
+  L2:
+    name: guarded-auto
+    description: >
+      Low-risk actions run automatically; the remaining tiers require human
+      approval.
+    auto_execute_tiers: [T1, T2]
+    require_approval: true
+
+  L3:
+    name: full-auto
+    description: >
+      Executes everything within the technical guardrails. Intended for
+      experimental runs on the testbed only.
+    auto_execute_tiers: [T1, T2, T3, T4]
+    require_approval: false
+
+global_guardrails:
+  # Circuit breaker: the run stops once this many actions have been executed.
+  max_actions_per_run: 10
+
+  # Actions in these tiers run only inside a declared maintenance window.
+  # Outside the window they are deferred, never executed, whatever the level.
+  require_maintenance_window_for_tiers: [T4, T5]
+
+  # Tiers that are never executed, even with human approval.
+  always_block_tiers: [T5]
+
+  # Actions whose action_class is unknown, or not listed in the control's
+  # allowed_action_classes, are blocked.
+  block_unclassified_actions: true
+
+  # No action runs without a pre-action snapshot and a defined rollback.
+  require_snapshot_before_execution: true
+
+  # After each executed action the Verifier re-checks the control; if the
+  # Finding is not resolved (or the check errors) the action is rolled back.
+  require_verification_after_execution: true
+  rollback_on_verification_failure: true
+
+  # Execution halts if an audit record cannot be written.
+  halt_on_audit_failure: true
