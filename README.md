@@ -9,7 +9,7 @@ Design principles:
 - **Every executed action is reversible by design.** A pre-action snapshot and a rollback procedure are mandatory; a failed verification triggers an automatic rollback.
 - **Autonomy is a dial, not a switch.** Four levels (L0–L3) map risk tiers to auto-execution, human approval or block.
 
-> Status: early stage. Architecture and configuration are defined; the implementation is not yet written.
+> Status: early stage. The configuration, data models, risk taxonomy, LLM client, deployment profiles and Auditor are implemented. The Assessor, Planner, PolicyEngine, Remediator, Verifier and the testbed are not written yet.
 
 ## Pipeline
 
@@ -36,40 +36,44 @@ Design principles:
 
 ### Core data types
 
-- **Finding**: control id, target service, observed vs expected value, evidence, timestamp.
-- **Action**: finding id, `action_class`, target, parameters, rationale (from the Planner).
-- **Decision**: action, risk tier, autonomy level, outcome, reasons (which rule produced the outcome).
+Defined in [agent/models.py](agent/models.py):
 
-## Modalità di deployment
+- **Finding**: id, control id, service, description, severity, source (`baseline` or `vulnerability_scan`).
+- **Action**: id, finding id, `action_class`, description, target service, parameters, and the risk tier, which the PolicyEngine fills in.
+- **AuditEntry**: timestamp, actor, event type, payload, autonomy level.
 
-L'agente supporta due profili di deployment, definiti in [config/deployment_profile.yaml](config/deployment_profile.yaml) e selezionati con la variabile `DEPLOYMENT_PROFILE` (default: `airgapped`).
+A `Decision` type (action, risk tier, autonomy level, outcome, reasons) will be added with the PolicyEngine.
+
+## Deployment modes
+
+The agent supports two deployment profiles, defined in [config/deployment_profile.yaml](config/deployment_profile.yaml) and selected with the `DEPLOYMENT_PROFILE` environment variable (default: `airgapped`).
 
 | | `airgapped` | `cloud` |
 |---|---|---|
-| Provider LLM | `local`: Ollama sul posto | `cloud`: API Anthropic |
-| Rete esterna (`allow_external_network`) | **non consentita** | consentita |
-| Contesto d'uso | Infrastrutture critiche e ambienti IT/OT isolati da Internet | Solo riferimento sperimentale di confronto |
-| Raccomandato per infrastrutture critiche | **Sì** | No |
-| File di esempio | [.env.airgapped.example](.env.airgapped.example) | [.env.cloud.example](.env.cloud.example) |
+| LLM provider | `local`: Ollama on site | `cloud`: Anthropic API |
+| External network (`allow_external_network`) | **not allowed** | allowed |
+| Intended context | Critical infrastructure and IT/OT environments isolated from the internet | Experimental comparison reference only |
+| Recommended for critical infrastructure | **Yes** | No |
+| Example env file | [.env.airgapped.example](.env.airgapped.example) | [.env.cloud.example](.env.cloud.example) |
 
-**Razionale.** Negli ambienti IT/OT air-gapped (impianti industriali, infrastrutture critiche) nessun dato di configurazione, finding o log può uscire dal perimetro, e spesso non esiste nemmeno una connessione verso l'esterno: l'LLM deve quindi girare in locale. Gli ambienti cloud-connected non hanno questo vincolo e permettono di usare un modello più capace; il profilo `cloud` serve a confrontare la qualità delle proposte del modello locale con quelle di un modello di riferimento, sul testbed simulato. Invia i dati dei finding a un servizio esterno, quindi non va usato con infrastrutture reali o dati sensibili.
+**Rationale.** In air-gapped IT/OT environments (industrial plants, critical infrastructure) no configuration data, finding or log may leave the perimeter, and often there is no outbound connection at all, so the LLM has to run locally. Cloud-connected environments do not have this constraint and can use a more capable model. The `cloud` profile exists to compare the proposals of the local model with those of a reference model on the simulated testbed. It sends finding data to an external service, so it must not be used with real infrastructure or sensitive data.
 
-**Guardrail di isolamento.** Se il profilo attivo ha `allow_external_network: false` e viene richiesto il provider `cloud` (via `LLM_PROVIDER` o dal codice), l'agente si ferma con `NetworkIsolationError`: non passa mai silenziosamente a un altro provider e non contatta la rete. Il controllo è anche in `AnthropicClient`, quindi non si aggira istanziandolo direttamente. Il guardrail vive nel codice dell'agente e non sostituisce l'isolamento di rete vero (reti Docker, firewall), che deve essere garantito dal deployment.
+**Network isolation guardrail.** If the active profile has `allow_external_network: false` and the `cloud` provider is requested (through `LLM_PROVIDER` or from code), the agent stops with `NetworkIsolationError`. It never silently falls back to another provider and never contacts the network. The check is also inside `AnthropicClient`, so it cannot be bypassed by instantiating the client directly. The guardrail lives in the agent code and does not replace real network isolation (Docker networks, firewall), which the deployment itself must guarantee.
 
-**Come passare da un profilo all'altro.**
+**Switching between profiles.**
 
 ```bash
 # air-gapped (default)
 cp .env.airgapped.example .env
 
-# cloud, solo per esperimenti di confronto: imposta ANTHROPIC_API_KEY nel file
+# cloud, for comparison experiments only: set ANTHROPIC_API_KEY in the file
 cp .env.cloud.example .env
 
-# il file .env non viene letto dall'agente: carica le variabili nella shell
+# the agent does not read the .env file itself: load the variables into the shell
 set -a && source .env && set +a
 ```
 
-In alternativa esporta `DEPLOYMENT_PROFILE=cloud` nella shell. Sotto il profilo `cloud` il provider `local` resta disponibile (`LLM_PROVIDER=local`), per eseguire entrambi i modelli sugli stessi finding. Nell'altro senso non è possibile: `airgapped` rifiuta sempre `cloud`.
+Alternatively, export `DEPLOYMENT_PROFILE=cloud` in the shell. Under the `cloud` profile the `local` provider stays available (`LLM_PROVIDER=local`), so both models can be run on the same findings. The reverse is not possible: `airgapped` always rejects `cloud`.
 
 ## LLM providers
 
@@ -106,7 +110,7 @@ Current action classes:
 | `change_ot_write_protection` | high | partially_reversible | T4 |
 | `remove_privileged_mode` | high | partially_reversible | T4 |
 
-An action class that is not in the taxonomy is treated as T5 and blocked.
+An action class that is not in the taxonomy is treated as T5 and blocked. No current action class falls in T5.
 
 ## Autonomy levels
 
@@ -170,7 +174,7 @@ Implemented so far: `config/`, `agent/` (data models, risk taxonomy, deployment 
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-cp .env.airgapped.example .env && set -a && source .env && set +a   # see "Modalità di deployment"
+cp .env.airgapped.example .env && set -a && source .env && set +a   # see "Deployment modes"
 python -m pytest
 ```
 
