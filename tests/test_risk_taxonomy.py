@@ -60,6 +60,7 @@ def test_every_tier_is_reachable_through_the_matrix(fixture_taxonomy, action_cla
         ("close_exposed_port", "T2"),
         ("apply_package_update", "T3"),
         ("remove_privileged_mode", "T4"),
+        ("enforce_storage_encryption", "T4"),
     ],
 )
 def test_real_config_tiers(real_taxonomy, action_class, tier):
@@ -81,6 +82,15 @@ def test_every_real_action_class_has_a_tier_and_rollback(real_taxonomy):
 def test_unknown_action_class_raises(real_taxonomy, method):
     with pytest.raises(UnknownActionClassError, match="delete_everything"):
         getattr(real_taxonomy, method)("delete_everything")
+
+
+def test_removed_ot_action_class_is_no_longer_defined(real_taxonomy):
+    with pytest.raises(UnknownActionClassError, match="change_ot_write_protection"):
+        real_taxonomy.get_risk_tier("change_ot_write_protection")
+
+
+def test_storage_encryption_rollback_strategy(real_taxonomy):
+    assert real_taxonomy.get_rollback_strategy("enforce_storage_encryption") == "restore_storage_volume"
 
 
 def test_error_lists_known_classes(real_taxonomy):

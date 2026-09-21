@@ -4,11 +4,20 @@
 # evaluates every control against the running testbed and emits a Finding for
 # each deviation.
 #
+# The controls cover standard IT components found in critical-infrastructure
+# organisations (energy, healthcare, finance, public administration, transport):
+# identity, storage, exposed applications, remote administration, containers and
+# network segmentation.
+#
 # Fields
 #   id                       Stable identifier, referenced by Findings and the audit trail.
 #   title                    Human-readable statement of the desired state.
-#   source                   Reference standard(s). Documentary label only: it is NOT used
-#                            by the agent and does not claim a verified control-by-control mapping.
+#   source                   Reference framework(s): ISO/IEC 27001:2022 Annex A, NIST SP 800-53
+#                            Rev. 5, CIS Controls v8, CIS Benchmarks. Documentary label only: it is
+#                            NOT used by the agent and does not claim a verified control-by-control
+#                            mapping. The NIS2 Directive (EU) 2022/2555 (Art. 21, cybersecurity
+#                            risk-management measures) is a general framework reference for the whole
+#                            baseline, not a per-control mapping.
 #   target_service           Testbed service the control applies to ("*" = every container).
 #   check_type               Name of the Assessor check implementation (see agent/ and tools/).
 #   params                   Check-specific parameters, including the expected value.
@@ -16,45 +25,49 @@
 #                            propose for this control. Anything else is rejected by the PolicyEngine.
 #
 # Testbed services referenced here:
-#   hmi-web        Operator web HMI (IT/OT boundary, TLS + login)
-#   plc-sim        Modbus/TCP PLC simulator (OT)
-#   jump-host      SSH bastion between IT and OT networks
-#   historian-db   Process data historian (database)
+#   web-app        Externally exposed web application (TLS + login)
+#   identity-svc   Identity / authentication service (accounts, password and lockout policy)
+#   storage-node   Storage service holding sensitive data (volumes, backups)
+#   db-server      Database server
+#   jump-host      SSH bastion used for administration across network zones
+#
+# Network zones: dmz_net (exposed applications), internal_net (internal services),
+# mgmt_net (administration only).
 
 schema_version: 1
 
 controls:
   - id: BC-001
-    title: Default credentials must not be accepted by the operator HMI
-    source: CIS Controls v8 (4.7); IEC 62443-3-3 (SR 1.5)
-    target_service: hmi-web
+    title: Default credentials must not be accepted by exposed web applications
+    source: CIS Controls v8 (4.7); NIST SP 800-53 Rev. 5 (IA-5)
+    target_service: web-app
     check_type: default_credentials
     params:
       login_endpoint: /api/login
       candidates:
         - { username: admin, password: admin }
         - { username: admin, password: password }
-        - { username: operator, password: operator }
+        - { username: administrator, password: administrator }
       expected: all_rejected
     allowed_action_classes: [rotate_credential]
 
   - id: BC-002
-    title: Administrative management ports must not be reachable from the IT network
-    source: CIS Controls v8 (4.4); IEC 62443-3-3 (SR 5.2)
-    target_service: hmi-web
+    title: Administrative management ports must not be reachable from application or internal networks
+    source: CIS Controls v8 (4.4); NIST SP 800-53 Rev. 5 (SC-7); ISO/IEC 27001:2022 (A.8.22)
+    target_service: web-app
     check_type: exposed_ports
     params:
       admin_ports:
         - { port: 9000, protocol: tcp, description: management console }
         - { port: 8081, protocol: tcp, description: debug interface }
-      forbidden_from_networks: [it_net, dmz_net]
+      forbidden_from_networks: [dmz_net, internal_net]
       expected: not_reachable
     allowed_action_classes: [close_exposed_port]
 
   - id: BC-003
     title: TLS certificates must not use weak signature algorithms
-    source: CIS Controls v8 (3.10); IEC 62443-3-3 (SR 4.3)
-    target_service: hmi-web
+    source: CIS Controls v8 (3.10); NIST SP 800-53 Rev. 5 (SC-13); ISO/IEC 27001:2022 (A.8.24)
+    target_service: web-app
     check_type: tls_config
     params:
       port: 443
@@ -67,17 +80,17 @@ controls:
     allowed_action_classes: [update_crypto_config]
 
   - id: BC-004
-    title: Write access to protected Modbus registers must be denied
-    source: IEC 62443-3-3 (SR 2.1); IEC 62443-4-2 (CR 2.1)
-    target_service: plc-sim
-    check_type: modbus_write_protection
+    title: Volumes holding sensitive data must be encrypted at rest
+    source: CIS Controls v8 (3.11); NIST SP 800-53 Rev. 5 (SC-28); ISO/IEC 27001:2022 (A.8.24)
+    target_service: storage-node
+    check_type: storage_encryption
     params:
-      port: 502
-      unit_id: 1
-      protected_holding_registers: { start: 0, count: 16 }
-      protected_coils: { start: 0, count: 8 }
-      expected: write_denied
-    allowed_action_classes: [change_ot_write_protection]
+      mount_points:
+        - /data/records
+        - /data/backups
+      accepted_encryption: [luks2, dm-crypt]
+      expected: all_encrypted
+    allowed_action_classes: [enforce_storage_encryption]
 
   - id: BC-005
     title: SSH password authentication must be disabled
@@ -91,9 +104,9 @@ controls:
     allowed_action_classes: [change_ssh_policy]
 
   - id: BC-006
-    title: HMI accounts must lock after repeated failed logins
-    source: IEC 62443-3-3 (SR 1.11); CIS Controls v8 (5.2)
-    target_service: hmi-web
+    title: The identity service must enforce account lockout and a minimum password strength
+    source: CIS Controls v8 (5.2); NIST SP 800-53 Rev. 5 (AC-7, IA-5); ISO/IEC 27001:2022 (A.5.17)
+    target_service: identity-svc
     check_type: auth_policy
     params:
       endpoint: /api/policy/auth
@@ -114,20 +127,20 @@ controls:
     allowed_action_classes: [remove_privileged_mode]
 
   - id: BC-008
-    title: Historian configuration files must not be readable by other users
+    title: Database configuration files must not be readable by other users
     source: CIS Benchmark for Linux (File Permissions); CIS Controls v8 (3.3)
-    target_service: historian-db
+    target_service: db-server
     check_type: file_permissions
     params:
-      path: /etc/historian/historian.conf
+      path: /etc/appdb/appdb.conf
       max_mode: "0640"
       expected_owner: root
     allowed_action_classes: [restrict_file_permissions]
 
   - id: BC-009
     title: Installed packages must not include known-vulnerable versions
-    source: CIS Controls v8 (7.4); IEC 62443-2-3 (patch management)
-    target_service: hmi-web
+    source: CIS Controls v8 (7.4); NIST SP 800-53 Rev. 5 (SI-2); ISO/IEC 27001:2022 (A.8.8)
+    target_service: web-app
     check_type: vulnerable_package
     params:
       packages:

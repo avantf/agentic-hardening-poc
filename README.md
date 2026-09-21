@@ -1,6 +1,8 @@
 # agentic-hardening-poc
 
-A proof of concept for an agent that observes a simulated IT/OT environment, detects deviations from a hardening baseline and known vulnerabilities, and proposes or executes remediation actions according to a **graduated autonomy level** derived from a **risk / reversibility taxonomy** of the actions.
+A proof of concept for an agent that observes a simulated IT environment, detects deviations from a hardening baseline and known vulnerabilities, and proposes or executes remediation actions according to a **graduated autonomy level** derived from a **risk / reversibility taxonomy** of the actions.
+
+The target domain is standard IT systems in critical-infrastructure organisations (energy, healthcare, finance, public administration, transport), with a focus on hardening and vulnerability remediation of common components: identity, storage, exposed applications and network segmentation.
 
 Design principles:
 
@@ -44,6 +46,22 @@ Defined in [agent/models.py](agent/models.py):
 
 A `Decision` type (action, risk tier, autonomy level, outcome, reasons) will be added with the PolicyEngine.
 
+## Testbed
+
+The agent is exercised against a simulated environment made of Docker containers that mimics a typical IT estate of a critical-infrastructure organisation:
+
+| Component | Service | Typical hardening concerns |
+|---|---|---|
+| Identity service | `identity-svc` | Password strength and account lockout policy |
+| Storage | `storage-node`, `db-server` | Encryption at rest, file permissions on configuration |
+| Exposed applications | `web-app` | Default credentials, exposed administrative ports, weak TLS signatures, vulnerable packages |
+| Remote administration | `jump-host` | SSH password authentication |
+| Runtime | all containers | Privileged containers |
+
+Network segmentation is modelled with three zones: `dmz_net` for exposed applications, `internal_net` for internal services and `mgmt_net` for administration only. Each service carries deliberately injected deviations from the baseline so the pipeline has something to detect and remediate.
+
+The testbed is not implemented yet; the services and zones above are the ones the baseline controls in [config/baseline_controls.yaml](config/baseline_controls.yaml) refer to.
+
 ## Deployment modes
 
 The agent supports two deployment profiles, defined in [config/deployment_profile.yaml](config/deployment_profile.yaml) and selected with the `DEPLOYMENT_PROFILE` environment variable (default: `airgapped`).
@@ -52,11 +70,11 @@ The agent supports two deployment profiles, defined in [config/deployment_profil
 |---|---|---|
 | LLM provider | `local`: Ollama on site | `cloud`: Anthropic API |
 | External network (`allow_external_network`) | **not allowed** | allowed |
-| Intended context | Critical infrastructure and IT/OT environments isolated from the internet | Experimental comparison reference only |
+| Intended context | Critical infrastructure and other IT environments isolated from the internet or highly restricted | Experimental comparison reference only |
 | Recommended for critical infrastructure | **Yes** | No |
 | Example env file | [.env.airgapped.example](.env.airgapped.example) | [.env.cloud.example](.env.cloud.example) |
 
-**Rationale.** In air-gapped IT/OT environments (industrial plants, critical infrastructure) no configuration data, finding or log may leave the perimeter, and often there is no outbound connection at all, so the LLM has to run locally. Cloud-connected environments do not have this constraint and can use a more capable model. The `cloud` profile exists to compare the proposals of the local model with those of a reference model on the simulated testbed. It sends finding data to an external service, so it must not be used with real infrastructure or sensitive data.
+**Rationale.** In air-gapped or highly restricted environments typical of critical infrastructure (energy, healthcare, finance, public administration, transport) no configuration data, finding or log may leave the perimeter, and often there is no outbound connection at all, so the LLM has to run locally. Cloud-connected environments do not have this constraint and can use a more capable model. The `cloud` profile exists to compare the proposals of the local model with those of a reference model on the simulated testbed. It sends finding data to an external service, so it must not be used with real infrastructure or sensitive data.
 
 **Network isolation guardrail.** If the active profile has `allow_external_network: false` and the `cloud` provider is requested (through `LLM_PROVIDER` or from code), the agent stops with `NetworkIsolationError`. It never silently falls back to another provider and never contacts the network. The check is also inside `AnthropicClient`, so it cannot be bypassed by instantiating the client directly. The guardrail lives in the agent code and does not replace real network isolation (Docker networks, firewall), which the deployment itself must guarantee.
 
@@ -107,7 +125,7 @@ Current action classes:
 | `change_ssh_policy` | medium | reversible | T2 |
 | `update_crypto_config` | medium | reversible | T2 |
 | `apply_package_update` | medium | partially_reversible | T3 |
-| `change_ot_write_protection` | high | partially_reversible | T4 |
+| `enforce_storage_encryption` | high | partially_reversible | T4 |
 | `remove_privileged_mode` | high | partially_reversible | T4 |
 
 An action class that is not in the taxonomy is treated as T5 and blocked. No current action class falls in T5.
@@ -138,27 +156,27 @@ The design is aligned with the logging and evidence controls of ISO/IEC 27001:20
 
 ## Baseline controls
 
-[config/baseline_controls.yaml](config/baseline_controls.yaml) defines the desired state of the testbed services. Each control has an `id`, `title`, `source` (reference standard, documentary label only), `target_service`, `check_type`, `params` and the `allowed_action_classes` the Planner may use. Included controls:
+[config/baseline_controls.yaml](config/baseline_controls.yaml) defines the desired state of the testbed services. Each control has an `id`, `title`, `source` (reference standard, documentary label only), `target_service`, `check_type`, `params` and the `allowed_action_classes` the Planner may use. The `source` labels refer to ISO/IEC 27001:2022, NIST SP 800-53 Rev. 5, CIS Controls v8 and CIS Benchmarks; the NIS2 Directive is a general framework reference for the baseline, not a per-control mapping. Included controls:
 
 | id | Control | Service |
 |---|---|---|
-| BC-001 | No default credentials | hmi-web |
-| BC-002 | Administrative ports not exposed | hmi-web |
-| BC-003 | No weak TLS signature algorithms | hmi-web |
-| BC-004 | Modbus write protection | plc-sim |
+| BC-001 | No default credentials | web-app |
+| BC-002 | Administrative ports not exposed | web-app |
+| BC-003 | No weak TLS signature algorithms | web-app |
+| BC-004 | Encryption at rest on sensitive volumes | storage-node |
 | BC-005 | SSH password authentication disabled | jump-host |
-| BC-006 | Account lockout / password policy | hmi-web |
+| BC-006 | Account lockout / password strength policy | identity-svc |
 | BC-007 | No privileged containers | all containers |
-| BC-008 | Restrictive permissions on sensitive config | historian-db |
-| BC-009 | No known-vulnerable packages | hmi-web |
+| BC-008 | Restrictive permissions on database configuration | db-server |
+| BC-009 | No known-vulnerable packages | web-app |
 
 ## Repository layout
 
 ```
 config/       Declarative configuration: baseline controls, risk taxonomy, autonomy policy, deployment profiles
-testbed/      Docker Compose environment: simulated IT/OT services and networks
+testbed/      Docker Compose environment: simulated IT services and network zones
 agent/        Pipeline implementation: assessor, planner, policy engine, remediator, verifier, auditor
-tools/        Typed, allow-listed adapters used to check and change the testbed (docker, ssh, modbus, files) with snapshot and rollback
+tools/        Typed, allow-listed adapters used to check and change the testbed (docker, ssh, storage, files) with snapshot and rollback
 experiments/  Scenario definitions and runners; results go to experiments/results/ (git-ignored)
 tests/        Unit and integration tests
 docs/         Documentation, e.g. the ISO/IEC 27001 mapping of the Auditor

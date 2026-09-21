@@ -23,10 +23,11 @@ profiles:
     llm_provider: local
     allow_external_network: false
     note: >
-      Recommended profile for critical infrastructure and IT/OT environments
-      that are isolated from the internet. The LLM runs locally through Ollama
-      and no finding, configuration or log leaves the environment. Requesting
-      the "cloud" provider under this profile is an error.
+      Recommended profile for critical infrastructure (energy, healthcare,
+      finance, public administration, transport) and other IT environments that
+      are isolated from the internet or highly restricted. The LLM runs locally
+      through Ollama and no finding, configuration or log leaves the environment.
+      Requesting the "cloud" provider under this profile is an error.
 
   cloud:
     llm_provider: cloud

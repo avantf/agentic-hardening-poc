@@ -95,16 +95,17 @@ action_classes:
         Tag the current image before the update and recreate the container from
         it on rollback. Data written to non-persistent layers after the update is lost.
 
-  change_ot_write_protection:
-    description: Enable write protection on OT registers/coils of a controller
+  enforce_storage_encryption:
+    description: Enable encryption at rest on a storage volume holding sensitive data
     impact: high
     reversibility: partially_reversible
     rollback_strategy:
-      type: restore_ot_config
+      type: restore_storage_volume
       description: >
-        Snapshot the controller write-protection configuration and register map
-        access flags; restore them on rollback. Write attempts denied in the
-        meantime are not replayed.
+        Keep the original, unencrypted volume untouched and snapshot it before the
+        data is migrated to an encrypted volume; escrow the new encryption key
+        before switching over. Rollback re-attaches the original volume. Data
+        written after the switch-over must be copied back, otherwise it is lost.
 
   remove_privileged_mode:
     description: Recreate a container without the privileged flag
