@@ -3,9 +3,10 @@
 Two implementations share one interface:
 
 - LocalOllamaClient: a local Ollama server. The default, and the only one meant
-  for the air-gapped deployment.
+  for the "airgapped" deployment profile.
 - AnthropicClient: the Anthropic API. A reference for experimental comparison
-  only; never used unless explicitly selected.
+  only; it refuses to start unless the active deployment profile allows
+  external network access (the "cloud" profile).
 
 The LLM only chooses an action_class among the ones it is offered and explains
 why. Its answer is validated here, and the PolicyEngine still classifies the
@@ -21,6 +22,7 @@ from typing import Any, Sequence
 
 import requests
 
+from agent.deployment_profile import DeploymentProfile, load_deployment_profile
 from agent.models import Finding
 
 DEFAULT_OLLAMA_MODEL = "llama3.1:8b"
@@ -47,6 +49,10 @@ class LLMClientError(Exception):
 
 class LLMConfigError(LLMClientError, ValueError):
     """The client is misconfigured (unknown provider, missing API key, ...)."""
+
+
+class NetworkIsolationError(LLMConfigError):
+    """A provider that needs external network access was requested under a profile that forbids it."""
 
 
 class LLMRequestError(LLMClientError):
@@ -164,6 +170,10 @@ class LocalOllamaClient(_ChatLLMClient):
 class AnthropicClient(_ChatLLMClient):
     """Calls the Anthropic API. Experimental comparison reference, not for air-gapped use.
 
+    Refuses to start (NetworkIsolationError) unless the active deployment profile
+    has allow_external_network enabled, whether built directly or via
+    get_llm_client().
+
     Environment:
         ANTHROPIC_API_KEY: required.
         ANTHROPIC_MODEL: model id (default "claude-opus-5").
@@ -176,8 +186,16 @@ class AnthropicClient(_ChatLLMClient):
         self,
         model: str | None = None,
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+        profile: DeploymentProfile | None = None,
     ) -> None:
         super().__init__(max_attempts)
+        profile = profile or load_deployment_profile()
+        if not profile.allow_external_network:
+            raise NetworkIsolationError(
+                f"provider 'cloud' needs external network access, which deployment profile "
+                f"{profile.name!r} forbids; use provider 'local', or set DEPLOYMENT_PROFILE=cloud "
+                "for an experimental comparison run"
+            )
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
             raise LLMConfigError("ANTHROPIC_API_KEY is not set; required for provider 'cloud'")
@@ -210,14 +228,22 @@ class AnthropicClient(_ChatLLMClient):
 def get_llm_client(provider: str | None = None) -> LLMClient:
     """Build the LLM client for `provider` ("local" or "cloud").
 
-    When `provider` is None it is read from the LLM_PROVIDER environment
-    variable, defaulting to "local".
+    The provider is `provider` if given, else the LLM_PROVIDER environment
+    variable, else the active deployment profile's llm_provider. The profile is
+    selected with DEPLOYMENT_PROFILE (default "airgapped").
+
+    Raises:
+        NetworkIsolationError: "cloud" was requested while the profile forbids
+            external network access (e.g. "airgapped"). Never silently downgraded.
+        LLMConfigError: unknown provider or missing configuration.
+        DeploymentProfileError: unknown DEPLOYMENT_PROFILE or malformed profile file.
     """
-    name = (provider or os.environ.get("LLM_PROVIDER") or "local").strip().lower()
+    profile = load_deployment_profile()
+    name = (provider or os.environ.get("LLM_PROVIDER") or profile.llm_provider).strip().lower()
     if name == "local":
         return LocalOllamaClient()
     if name == "cloud":
-        return AnthropicClient()
+        return AnthropicClient(profile=profile)
     raise LLMConfigError(f"unknown LLM provider {name!r}; expected 'local' or 'cloud'")
 
 

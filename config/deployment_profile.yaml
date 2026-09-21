@@ -1,0 +1,38 @@
+# Deployment profiles.
+#
+# A profile fixes which LLM provider the Planner uses and whether the agent is
+# allowed to reach networks outside the deployment. The active profile is
+# selected with the DEPLOYMENT_PROFILE environment variable; when unset,
+# default_profile applies.
+#
+# Fields per profile
+#   llm_provider             Default provider for the profile: "local" (Ollama) or "cloud" (Anthropic API).
+#   allow_external_network   false: any component that needs an external network
+#                            (currently the "cloud" LLM provider) refuses to start.
+#   note                     Intended context of use.
+#
+# The guardrail is enforced by the agent code. It does not replace network-level
+# isolation (Docker networks, firewall), which must be enforced by the deployment itself.
+
+schema_version: 1
+
+default_profile: airgapped
+
+profiles:
+  airgapped:
+    llm_provider: local
+    allow_external_network: false
+    note: >
+      Recommended profile for critical infrastructure and IT/OT environments
+      that are isolated from the internet. The LLM runs locally through Ollama
+      and no finding, configuration or log leaves the environment. Requesting
+      the "cloud" provider under this profile is an error.
+
+  cloud:
+    llm_provider: cloud
+    allow_external_network: true
+    note: >
+      Experimental reference only: the LLM is the Anthropic API, used to compare
+      its proposals with the local model's. It sends finding data to an external
+      service, so it must not be used with real infrastructure or sensitive
+      data. Not a recommended deployment for critical infrastructure.

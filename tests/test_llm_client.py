@@ -14,6 +14,7 @@ from agent.llm_client import (
     LLMRequestError,
     LLMResponseError,
     LocalOllamaClient,
+    NetworkIsolationError,
     get_llm_client,
 )
 from agent.models import Finding
@@ -32,7 +33,7 @@ FINDING = Finding(
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
-    for var in ("LLM_PROVIDER", "OLLAMA_MODEL", "OLLAMA_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL"):
+    for var in ("DEPLOYMENT_PROFILE", "LLM_PROVIDER", "OLLAMA_MODEL", "OLLAMA_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_MODEL"):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -53,7 +54,7 @@ def ollama_response(content: str) -> MagicMock:
 # --- factory -----------------------------------------------------------------
 
 
-def test_default_provider_is_local(post):
+def test_default_profile_and_provider_are_airgapped_local(post):
     client = get_llm_client()
     assert isinstance(client, LocalOllamaClient)
     assert isinstance(client, LLMClient)
@@ -61,6 +62,7 @@ def test_default_provider_is_local(post):
 
 
 def test_provider_read_from_environment(monkeypatch):
+    monkeypatch.setenv("DEPLOYMENT_PROFILE", "cloud")
     monkeypatch.setenv("LLM_PROVIDER", "cloud")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     assert isinstance(get_llm_client(), AnthropicClient)
@@ -71,12 +73,25 @@ def test_explicit_argument_overrides_environment(monkeypatch):
     assert isinstance(get_llm_client("local"), LocalOllamaClient)
 
 
+def test_cloud_profile_defaults_to_cloud_provider(monkeypatch):
+    monkeypatch.setenv("DEPLOYMENT_PROFILE", "cloud")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    assert isinstance(get_llm_client(), AnthropicClient)
+
+
+def test_local_provider_stays_available_under_cloud_profile(monkeypatch):
+    monkeypatch.setenv("DEPLOYMENT_PROFILE", "cloud")
+    assert isinstance(get_llm_client("local"), LocalOllamaClient)
+
+
 def test_provider_name_is_case_insensitive(monkeypatch):
+    monkeypatch.setenv("DEPLOYMENT_PROFILE", "cloud")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     assert isinstance(get_llm_client(" Cloud "), AnthropicClient)
 
 
-def test_cloud_without_api_key_raises():
+def test_cloud_without_api_key_raises(monkeypatch):
+    monkeypatch.setenv("DEPLOYMENT_PROFILE", "cloud")
     with pytest.raises(LLMConfigError, match="ANTHROPIC_API_KEY"):
         get_llm_client("cloud")
 
@@ -90,6 +105,44 @@ def test_ollama_model_default_and_override(monkeypatch):
     assert get_llm_client("local").model == "llama3.1:8b"
     monkeypatch.setenv("OLLAMA_MODEL", "qwen2.5:7b")
     assert get_llm_client("local").model == "qwen2.5:7b"
+
+
+# --- network isolation guardrail ----------------------------------------------
+
+
+def test_airgapped_profile_rejects_cloud_argument(monkeypatch):
+    monkeypatch.setenv("DEPLOYMENT_PROFILE", "airgapped")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")  # a valid key must not matter
+    with pytest.raises(NetworkIsolationError, match="airgapped"):
+        get_llm_client("cloud")
+
+
+def test_airgapped_profile_rejects_cloud_from_environment(monkeypatch):
+    monkeypatch.setenv("DEPLOYMENT_PROFILE", "airgapped")
+    monkeypatch.setenv("LLM_PROVIDER", "cloud")
+    with pytest.raises(NetworkIsolationError):
+        get_llm_client()
+
+
+def test_default_profile_is_airgapped_so_cloud_is_rejected(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    with pytest.raises(NetworkIsolationError):
+        get_llm_client("cloud")
+
+
+def test_airgapped_rejection_takes_priority_over_missing_api_key():
+    with pytest.raises(NetworkIsolationError):
+        get_llm_client("cloud")  # no ANTHROPIC_API_KEY set either
+
+
+def test_anthropic_client_cannot_be_built_directly_under_airgapped(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    with pytest.raises(NetworkIsolationError):
+        AnthropicClient()
+
+
+def test_network_isolation_error_is_a_config_error():
+    assert issubclass(NetworkIsolationError, LLMConfigError)
 
 
 # --- LocalOllamaClient -------------------------------------------------------
@@ -153,6 +206,7 @@ def test_empty_action_class_list_raises(post):
 
 
 def anthropic_client(monkeypatch, *replies: SimpleNamespace) -> AnthropicClient:
+    monkeypatch.setenv("DEPLOYMENT_PROFILE", "cloud")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     client = AnthropicClient()
     client._client = MagicMock()
