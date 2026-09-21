@@ -1,2 +1,6 @@
 PyYAML>=6.0
+requests>=2.31
 pytest>=8.0
+
+# Only needed for LLM_PROVIDER=cloud (experimental comparison); not required for local/air-gapped use.
+anthropic>=1.0

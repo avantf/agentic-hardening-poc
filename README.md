@@ -40,6 +40,15 @@ Design principles:
 - **Action**: finding id, `action_class`, target, parameters, rationale (from the Planner).
 - **Decision**: action, risk tier, autonomy level, outcome, reasons (which rule produced the outcome).
 
+## LLM providers
+
+The Planner talks to an LLM through the `LLMClient` interface in [agent/llm_client.py](agent/llm_client.py), selected with `LLM_PROVIDER` (see [.env.example](.env.example)):
+
+- `local` (default): a local Ollama server, model set by `OLLAMA_MODEL` (default `llama3.1:8b`). This is the provider intended for air-gapped deployments.
+- `cloud`: the Anthropic API (`ANTHROPIC_API_KEY`), kept as a reference for experimental comparison only.
+
+The model only picks an `action_class` from the list it is given and justifies the choice. Its output is validated (JSON shape, allowed class) and retried on malformed replies; the risk tier is still derived from the taxonomy, never from the model.
+
 ## Risk model
 
 The PolicyEngine never trusts a risk rating from the Planner. The tier comes only from the taxonomy:
