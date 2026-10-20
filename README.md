@@ -11,7 +11,7 @@ Design principles:
 - **Every executed action is reversible by design.** A pre-action snapshot and a rollback procedure are mandatory; a failed verification triggers an automatic rollback.
 - **Autonomy is a dial, not a switch.** Four levels (L0–L3) map risk tiers to auto-execution, human approval or block.
 
-> Status: early stage. The configuration, data models, risk taxonomy, LLM client, deployment profiles and Auditor are implemented. The Assessor, Planner, PolicyEngine, Remediator, Verifier and the testbed are not written yet.
+> Status: early stage. The configuration, data models, risk taxonomy, LLM client, deployment profiles, PolicyEngine and Auditor are implemented. The Assessor, Planner, Remediator, Verifier and the testbed are not written yet.
 
 ## Pipeline
 
@@ -31,7 +31,7 @@ Design principles:
 |---|---|---|
 | **Assessor** | testbed state + `baseline_controls.yaml` → `Finding[]` | Runs each control's check against the target service and reports every deviation or known-vulnerable component. Read-only. |
 | **Planner** | `Finding` → `Action` | An LLM proposes one Action per Finding, restricted to the control's `allowed_action_classes`. Output is validated against a strict schema; free-form commands are not accepted. |
-| **PolicyEngine** | `Action` + active level → `Decision` | Looks up the action class in `risk_taxonomy.yaml`, derives the risk tier from the risk matrix, applies `autonomy_policy.yaml` and the global guardrails, and returns `auto_execute`, `needs_approval`, `block` or `defer`. |
+| **PolicyEngine** | `Action` + active level → `PolicyDecision` | Looks up the action class in `risk_taxonomy.yaml`, derives the risk tier from the risk matrix, applies `autonomy_policy.yaml` and the global guardrails, and returns `auto_execute`, `require_approval`, `blocked` or `observe_only`. Actions deferred for lack of a maintenance window are `blocked`. |
 | **Remediator** | authorized `Action` → execution result | Takes a pre-action snapshot, executes through the typed adapters in `tools/`, and keeps the rollback handle. |
 | **Verifier** | executed `Action` → verified / failed | Re-runs the originating check to confirm the Finding is resolved; on failure it triggers rollback. |
 | **Auditor** | every step → audit record | Records findings, proposals, policy decisions, approvals, executions, verifications and rollbacks. |
@@ -44,7 +44,7 @@ Defined in [agent/models.py](agent/models.py):
 - **Action**: id, finding id, `action_class`, description, target service, parameters, and the risk tier, which the PolicyEngine fills in.
 - **AuditEntry**: timestamp, actor, event type, payload, autonomy level.
 
-A `Decision` type (action, risk tier, autonomy level, outcome, reasons) will be added with the PolicyEngine.
+[agent/policy_engine.py](agent/policy_engine.py) defines **PolicyDecision**: decision, nominal tier (from the taxonomy), effective tier (nominal tier moved by `tier_adjustment`, clamped to T1–T5) and a reason for the audit trail. The decision depends only on the action class, its tier, the autonomy level, `tier_adjustment` and the guardrail state; free text in a Finding or Action is never read. `tier_adjustment` is a hook for future dynamic autonomy and defaults to 0; it changes the level mapping, but guardrails use the higher of the nominal and effective tier, so it can never loosen them.
 
 ## Testbed
 
@@ -184,7 +184,7 @@ scripts/      Helper scripts (testbed up/down, fault injection, report generatio
 logs/         Runtime logs and audit trail (git-ignored)
 ```
 
-Implemented so far: `config/`, `agent/` (data models, risk taxonomy, deployment profile, LLM client, auditor), `docs/` and `tests/`; the other directories are planned.
+Implemented so far: `config/`, `agent/` (data models, risk taxonomy, deployment profile, LLM client, policy engine, auditor), `docs/` and `tests/`; the other directories are planned.
 
 ## Getting started
 

@@ -19,6 +19,7 @@ FIXTURE_TAXONOMY = textwrap.dedent(
     """
     schema_version: 1
     tiers: {T1: {}, T2: {}, T3: {}, T4: {}, T5: {}}
+    unclassified_action_tier: T5
     action_classes:
       a_t1: {impact: low,    reversibility: reversible,           rollback_strategy: {type: rb_t1}}
       a_t2: {impact: low,    reversibility: partially_reversible, rollback_strategy: {type: rb_t2}}

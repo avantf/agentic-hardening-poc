@@ -42,7 +42,13 @@ class RiskTaxonomy:
             data, "risk_matrix"
         )
         self._tiers: set[str] = set(self._require(data, "tiers"))
+        self._unclassified_action_tier: str = self._require(data, "unclassified_action_tier")
         self._validate()
+
+    @property
+    def unclassified_action_tier(self) -> RiskTier:
+        """Tier applied to an action_class that is not in the taxonomy (fail-safe)."""
+        return self._unclassified_action_tier  # type: ignore[return-value]
 
     def get_risk_tier(self, action_class: str) -> RiskTier:
         """Return the risk tier (T1..T5) for `action_class` via the risk matrix."""
@@ -69,6 +75,10 @@ class RiskTaxonomy:
         return data[key]
 
     def _validate(self) -> None:
+        if self._unclassified_action_tier not in self._tiers:
+            raise TaxonomyConfigError(
+                f"unclassified_action_tier uses undefined tier {self._unclassified_action_tier!r}"
+            )
         for impact, row in self._risk_matrix.items():
             for reversibility, tier in row.items():
                 if tier not in self._tiers:
