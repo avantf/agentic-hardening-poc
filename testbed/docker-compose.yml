@@ -1,0 +1,75 @@
+# Generic IT testbed of a critical-infrastructure organisation.
+#
+# Every security-relevant setting is a compose variable with a compliant
+# default. config/drift_scenarios.yaml injects a deviation by overriding one of
+# them, e.g. `scripts/setup_testbed.sh --scenario DS-004`.
+#
+# Segmentation:
+#   frontend  exposed zone; reachable from the host through published ports.
+#   internal  internal services; `internal: true`, so no published ports and no
+#             route outside the Docker network.
+# identity-service and storage-service are only on `internal`: reach them from
+# the bastion, e.g. `docker compose exec bastion curl http://identity-service:8080/status`.
+#
+# Published ports are bound to 127.0.0.1 only.
+
+name: agentic-testbed
+
+services:
+  vuln-web:
+    build:
+      context: ./services
+      dockerfile: vuln-web/Dockerfile
+      args:
+        WERKZEUG_VERSION: ${WERKZEUG_VERSION:-3.0.6}
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-Tb-9f3c1e7a52d84b06}
+      DEBUG_PORT_ENABLED: ${DEBUG_PORT_ENABLED:-false}
+      TLS_SIGNATURE_ALGORITHM: ${TLS_SIGNATURE_ALGORITHM:-sha256WithRSAEncryption}
+    privileged: ${VULN_WEB_PRIVILEGED:-false}
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:9000:9000"
+    networks: [frontend, internal]
+
+  identity-service:
+    build:
+      context: ./services
+      dockerfile: identity-service/Dockerfile
+    environment:
+      PASSWORD_MIN_LENGTH: ${PASSWORD_MIN_LENGTH:-12}
+      MFA_REQUIRED: ${MFA_REQUIRED:-true}
+    privileged: ${IDENTITY_SERVICE_PRIVILEGED:-false}
+    networks: [internal]
+
+  storage-service:
+    build:
+      context: ./services
+      dockerfile: storage-service/Dockerfile
+    environment:
+      ENCRYPTION_AT_REST: ${ENCRYPTION_AT_REST:-true}
+      CONFIG_FILE_MODE: ${CONFIG_FILE_MODE:-0640}
+    privileged: ${STORAGE_SERVICE_PRIVILEGED:-false}
+    volumes:
+      - storage-data:/data
+    networks: [internal]
+
+  bastion:
+    build:
+      context: ./services
+      dockerfile: bastion/Dockerfile
+    environment:
+      SSH_PASSWORD_AUTH: ${SSH_PASSWORD_AUTH:-no}
+    privileged: ${BASTION_PRIVILEGED:-false}
+    ports:
+      - "127.0.0.1:2222:22"
+      - "127.0.0.1:8081:8080"
+    networks: [frontend, internal]
+
+networks:
+  frontend:
+  internal:
+    internal: true
+
+volumes:
+  storage-data:

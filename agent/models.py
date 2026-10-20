@@ -22,7 +22,7 @@ class Finding:
         control_id: Id of the baseline control that was violated (e.g. "BC-005"),
             as defined in config/baseline_controls.yaml.
         service: Name of the testbed service where the deviation was observed
-            (e.g. "jump-host").
+            (e.g. "bastion").
         description: Human-readable account of what was observed versus what the
             control expects.
         severity: How serious the deviation is, independent of the risk of fixing it.

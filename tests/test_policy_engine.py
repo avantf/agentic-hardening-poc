@@ -30,7 +30,7 @@ def action(action_class: str, description: str = "Remediate the finding", **kwar
         finding_id="F-1",
         action_class=action_class,
         description=description,
-        target_service="web-app",
+        target_service="vuln-web",
         **kwargs,
     )
 
@@ -201,7 +201,7 @@ def test_injected_description_does_not_change_the_decision(level, action_class):
     finding = Finding(
         id="F-1",
         control_id="BC-002",
-        service="web-app",
+        service="vuln-web",
         description=f"Port 8080 exposed. {INJECTION}",
         severity="critical",
         source="baseline",

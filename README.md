@@ -11,7 +11,7 @@ Design principles:
 - **Every executed action is reversible by design.** A pre-action snapshot and a rollback procedure are mandatory; a failed verification triggers an automatic rollback.
 - **Autonomy is a dial, not a switch.** Four levels (L0–L3) map risk tiers to auto-execution, human approval or block.
 
-> Status: early stage. The configuration, data models, risk taxonomy, LLM client, deployment profiles, PolicyEngine and Auditor are implemented. The Assessor, Planner, Remediator, Verifier and the testbed are not written yet.
+> Status: early stage. The configuration, data models, risk taxonomy, LLM client, deployment profiles, PolicyEngine, Auditor and the Docker testbed are implemented. The Assessor, Planner, Remediator and Verifier are not written yet.
 
 ## Pipeline
 
@@ -48,19 +48,26 @@ Defined in [agent/models.py](agent/models.py):
 
 ## Testbed
 
-The agent is exercised against a simulated environment made of Docker containers that mimics a typical IT estate of a critical-infrastructure organisation:
+[testbed/docker-compose.yml](testbed/docker-compose.yml) runs four containers that stand in for typical IT components of a critical-infrastructure organisation. Each one exposes `GET /status`, a JSON view of its security-relevant state read live on every request, so the Assessor can check the baseline without inspecting Docker.
 
-| Component | Service | Typical hardening concerns |
-|---|---|---|
-| Identity service | `identity-svc` | Password strength and account lockout policy |
-| Storage | `storage-node`, `db-server` | Encryption at rest, file permissions on configuration |
-| Exposed applications | `web-app` | Default credentials, exposed administrative ports, weak TLS signatures, vulnerable packages |
-| Remote administration | `jump-host` | SSH password authentication |
-| Runtime | all containers | Privileged containers |
+| Service | Networks | State reported by `/status` | Controls |
+|---|---|---|---|
+| `vuln-web` (Flask) | frontend, internal | admin password is a known default, debug console on port 9000, TLS signature algorithm (simulated), installed Flask/Werkzeug versions | BC-001, BC-002, BC-003, BC-009 |
+| `identity-service` (Flask mock) | internal | `PASSWORD_MIN_LENGTH`, `MFA_REQUIRED` | BC-006 |
+| `storage-service` (Flask mock) | internal | `ENCRYPTION_AT_REST`, owner and mode of `/etc/storage/storage.conf` | BC-004, BC-008 |
+| `bastion` (Ubuntu + sshd) | frontend, internal | `PasswordAuthentication` in `sshd_config` and the effective value from `sshd -T` | BC-005 |
 
-Network segmentation is modelled with three zones: `dmz_net` for exposed applications, `internal_net` for internal services and `mgmt_net` for administration only. Each service carries deliberately injected deviations from the baseline so the pipeline has something to detect and remediate.
+Every service also reports `runtime.privileged`, derived from its own capability set (BC-007).
 
-The testbed is not implemented yet; the services and zones above are the ones the baseline controls in [config/baseline_controls.yaml](config/baseline_controls.yaml) refer to.
+Segmentation uses two networks: `frontend` and `internal`. `internal` is a Docker `internal: true` network, so it has no route out of Docker and cannot publish ports. `identity-service` and `storage-service` are attached only to `internal` and are reached through the bastion, e.g. `docker compose -f testbed/docker-compose.yml exec bastion curl http://identity-service:8080/status`. Published ports are bound to `127.0.0.1`: `8080` (vuln-web), `9000` (vuln-web debug console, listening only when enabled), `8081` (bastion status), `2222` (bastion SSH).
+
+The testbed starts compliant. [config/drift_scenarios.yaml](config/drift_scenarios.yaml) defines one deviation per baseline control as compose-variable overrides, with the `/status` values that confirm the injection:
+
+```bash
+scripts/setup_testbed.sh                                      # build, start, wait for health checks
+scripts/setup_testbed.sh --scenario DS-004 --scenario DS-007  # inject drift
+scripts/reset_testbed.sh                                      # destroy and restart compliant
+```
 
 ## Deployment modes
 
@@ -156,35 +163,35 @@ The design is aligned with the logging and evidence controls of ISO/IEC 27001:20
 
 ## Baseline controls
 
-[config/baseline_controls.yaml](config/baseline_controls.yaml) defines the desired state of the testbed services. Each control has an `id`, `title`, `source` (reference standard, documentary label only), `target_service`, `check_type`, `params` and the `allowed_action_classes` the Planner may use. The `source` labels refer to ISO/IEC 27001:2022, NIST SP 800-53 Rev. 5, CIS Controls v8 and CIS Benchmarks; the NIS2 Directive is a general framework reference for the baseline, not a per-control mapping. Included controls:
+[config/baseline_controls.yaml](config/baseline_controls.yaml) defines the desired state of the testbed services. Each control has an `id`, `title`, `source` (reference standard, documentary label only), `target_service`, `check_type` (currently always `status_field`: assertions on the service's `/status` JSON), `params` and the `allowed_action_classes` the Planner may use. The `source` labels refer to ISO/IEC 27001:2022, NIST SP 800-53 Rev. 5, CIS Controls v8 and CIS Benchmarks; the NIS2 Directive is a general framework reference for the baseline, not a per-control mapping. Included controls:
 
 | id | Control | Service |
 |---|---|---|
-| BC-001 | No default credentials | web-app |
-| BC-002 | Administrative ports not exposed | web-app |
-| BC-003 | No weak TLS signature algorithms | web-app |
-| BC-004 | Encryption at rest on sensitive volumes | storage-node |
-| BC-005 | SSH password authentication disabled | jump-host |
-| BC-006 | Account lockout / password strength policy | identity-svc |
+| BC-001 | No default credentials | vuln-web |
+| BC-002 | Administrative debug port not exposed | vuln-web |
+| BC-003 | No weak TLS signature algorithms | vuln-web |
+| BC-004 | Encryption at rest on sensitive data | storage-service |
+| BC-005 | SSH password authentication disabled | bastion |
+| BC-006 | Minimum password length and MFA | identity-service |
 | BC-007 | No privileged containers | all containers |
-| BC-008 | Restrictive permissions on database configuration | db-server |
-| BC-009 | No known-vulnerable packages | web-app |
+| BC-008 | Restrictive permissions on storage configuration | storage-service |
+| BC-009 | No known-vulnerable packages | vuln-web |
 
 ## Repository layout
 
 ```
 config/       Declarative configuration: baseline controls, risk taxonomy, autonomy policy, deployment profiles
-testbed/      Docker Compose environment: simulated IT services and network zones
+testbed/      Docker Compose environment: simulated IT services (testbed/services/) and network zones
 agent/        Pipeline implementation: assessor, planner, policy engine, remediator, verifier, auditor
 tools/        Typed, allow-listed adapters used to check and change the testbed (docker, ssh, storage, files) with snapshot and rollback
 experiments/  Scenario definitions and runners; results go to experiments/results/ (git-ignored)
 tests/        Unit and integration tests
 docs/         Documentation, e.g. the ISO/IEC 27001 mapping of the Auditor
-scripts/      Helper scripts (testbed up/down, fault injection, report generation)
+scripts/      Helper scripts: testbed setup with drift injection, reset
 logs/         Runtime logs and audit trail (git-ignored)
 ```
 
-Implemented so far: `config/`, `agent/` (data models, risk taxonomy, deployment profile, LLM client, policy engine, auditor), `docs/` and `tests/`; the other directories are planned.
+Implemented so far: `config/`, `agent/` (data models, risk taxonomy, deployment profile, LLM client, policy engine, auditor), `testbed/`, `scripts/`, `docs/` and `tests/`; the other directories are planned.
 
 ## Getting started
 

@@ -1,0 +1,84 @@
+# Drift scenarios for the testbed.
+#
+# The testbed starts compliant with every control in baseline_controls.yaml.
+# A scenario injects one deviation by overriding compose variables of
+# testbed/docker-compose.yml; apply it with
+#
+#   scripts/setup_testbed.sh --scenario DS-004 [--scenario DS-007 ...]
+#
+# and return to the compliant baseline with scripts/reset_testbed.sh.
+#
+# Fields
+#   id               Stable identifier of the scenario.
+#   control_id       Baseline control the scenario violates.
+#   service          Compose service the deviation is injected into.
+#   description      What the deviation simulates.
+#   variables        Compose variables to set (values are strings).
+#   expected_status  Values the service's /status reports once the scenario is
+#                    applied (dotted paths), so a run can confirm the injection.
+
+schema_version: 1
+
+scenarios:
+  - id: DS-001
+    control_id: BC-001
+    service: vuln-web
+    description: Admin account left with the vendor default password
+    variables: { ADMIN_PASSWORD: admin }
+    expected_status: { admin_password_is_default: true }
+
+  - id: DS-002
+    control_id: BC-002
+    service: vuln-web
+    description: Debug console enabled on port 9000 and reachable from the frontend network
+    variables: { DEBUG_PORT_ENABLED: "true" }
+    expected_status: { debug_port.enabled: true }
+
+  - id: DS-003
+    control_id: BC-003
+    service: vuln-web
+    description: TLS certificate re-issued with a SHA-1 signature (simulated)
+    variables: { TLS_SIGNATURE_ALGORITHM: sha1WithRSAEncryption }
+    expected_status: { tls.signature_algorithm: sha1WithRSAEncryption }
+
+  - id: DS-004
+    control_id: BC-004
+    service: storage-service
+    description: Sensitive data volume provisioned without encryption at rest
+    variables: { ENCRYPTION_AT_REST: "false" }
+    expected_status: { encryption_at_rest: false }
+
+  - id: DS-005
+    control_id: BC-005
+    service: bastion
+    description: SSH password authentication re-enabled on the jump host
+    variables: { SSH_PASSWORD_AUTH: "yes" }
+    expected_status: { ssh.effective_password_authentication: "yes" }
+
+  - id: DS-006
+    control_id: BC-006
+    service: identity-service
+    description: Password policy weakened to 6 characters and MFA disabled
+    variables: { PASSWORD_MIN_LENGTH: "6", MFA_REQUIRED: "false" }
+    expected_status: { auth_policy.password_min_length: 6, auth_policy.mfa_required: false }
+
+  - id: DS-007
+    control_id: BC-007
+    service: storage-service
+    description: Storage container started in privileged mode to "fix" a device-mapper issue
+    variables: { STORAGE_SERVICE_PRIVILEGED: "true" }
+    expected_status: { runtime.privileged: true }
+
+  - id: DS-008
+    control_id: BC-008
+    service: storage-service
+    description: Storage configuration file made world-readable
+    variables: { CONFIG_FILE_MODE: "0644" }
+    expected_status: { config_file.mode: "0644" }
+
+  - id: DS-009
+    control_id: BC-009
+    service: vuln-web
+    description: Image rebuilt with a known-vulnerable Werkzeug release
+    variables: { WERKZEUG_VERSION: "3.0.1" }
+    expected_status: { packages.werkzeug: "3.0.1" }

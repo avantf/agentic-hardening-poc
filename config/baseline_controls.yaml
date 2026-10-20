@@ -19,20 +19,23 @@
 #                            risk-management measures) is a general framework reference for the whole
 #                            baseline, not a per-control mapping.
 #   target_service           Testbed service the control applies to ("*" = every container).
-#   check_type               Name of the Assessor check implementation (see agent/ and tools/).
-#   params                   Check-specific parameters, including the expected value.
+#   check_type               Name of the Assessor check implementation. All current controls use
+#                            status_field: read the service's GET /status (JSON) and evaluate
+#                            params.assertions against it.
+#   params.assertions        List of {field, operator, expected}. `field` is a dotted path into the
+#                            /status JSON. Operators: eq, gte, not_in, version_gte, mode_at_most (octal
+#                            file mode with no bits beyond `expected`).
 #   allowed_action_classes   action_class values (see risk_taxonomy.yaml) the Planner may
 #                            propose for this control. Anything else is rejected by the PolicyEngine.
 #
-# Testbed services referenced here:
-#   web-app        Externally exposed web application (TLS + login)
-#   identity-svc   Identity / authentication service (accounts, password and lockout policy)
-#   storage-node   Storage service holding sensitive data (volumes, backups)
-#   db-server      Database server
-#   jump-host      SSH bastion used for administration across network zones
+# Testbed services (testbed/docker-compose.yml), all exposing GET /status on port 8080:
+#   vuln-web          Exposed web application (admin login, debug console, TLS, Python packages)
+#   identity-service  Identity / authentication service (password policy, MFA)
+#   storage-service   Storage service holding sensitive data (encryption at rest, config file)
+#   bastion           SSH jump host used for administration across network zones
 #
-# Network zones: dmz_net (exposed applications), internal_net (internal services),
-# mgmt_net (administration only).
+# Network zones: frontend (exposed; vuln-web, bastion) and internal (internal services;
+# identity-service and storage-service are attached to this network only).
 
 schema_version: 1
 
@@ -40,111 +43,98 @@ controls:
   - id: BC-001
     title: Default credentials must not be accepted by exposed web applications
     source: CIS Controls v8 (4.7); NIST SP 800-53 Rev. 5 (IA-5)
-    target_service: web-app
-    check_type: default_credentials
+    target_service: vuln-web
+    check_type: status_field
     params:
-      login_endpoint: /api/login
-      candidates:
-        - { username: admin, password: admin }
-        - { username: admin, password: password }
-        - { username: administrator, password: administrator }
-      expected: all_rejected
+      assertions:
+        - { field: admin_password_is_default, operator: eq, expected: false }
     allowed_action_classes: [rotate_credential]
 
   - id: BC-002
-    title: Administrative management ports must not be reachable from application or internal networks
+    title: Administrative debug ports must not be reachable from application or internal networks
     source: CIS Controls v8 (4.4); NIST SP 800-53 Rev. 5 (SC-7); ISO/IEC 27001:2022 (A.8.22)
-    target_service: web-app
-    check_type: exposed_ports
+    target_service: vuln-web
+    check_type: status_field
     params:
       admin_ports:
-        - { port: 9000, protocol: tcp, description: management console }
-        - { port: 8081, protocol: tcp, description: debug interface }
-      forbidden_from_networks: [dmz_net, internal_net]
-      expected: not_reachable
+        - { port: 9000, protocol: tcp, description: debug console }
+      forbidden_from_networks: [frontend, internal]
+      assertions:
+        - { field: debug_port.enabled, operator: eq, expected: false }
     allowed_action_classes: [close_exposed_port]
 
   - id: BC-003
     title: TLS certificates must not use weak signature algorithms
     source: CIS Controls v8 (3.10); NIST SP 800-53 Rev. 5 (SC-13); ISO/IEC 27001:2022 (A.8.24)
-    target_service: web-app
-    check_type: tls_config
+    target_service: vuln-web
+    check_type: status_field
     params:
-      port: 443
-      min_tls_version: "1.2"
-      min_rsa_key_bits: 2048
-      disallowed_signature_algorithms:
-        - md5WithRSAEncryption
-        - sha1WithRSAEncryption
-      expected: no_disallowed_algorithms
+      assertions:
+        - field: tls.signature_algorithm
+          operator: not_in
+          expected: [md5WithRSAEncryption, sha1WithRSAEncryption]
     allowed_action_classes: [update_crypto_config]
 
   - id: BC-004
-    title: Volumes holding sensitive data must be encrypted at rest
+    title: Storage holding sensitive data must be encrypted at rest
     source: CIS Controls v8 (3.11); NIST SP 800-53 Rev. 5 (SC-28); ISO/IEC 27001:2022 (A.8.24)
-    target_service: storage-node
-    check_type: storage_encryption
+    target_service: storage-service
+    check_type: status_field
     params:
-      mount_points:
-        - /data/records
-        - /data/backups
-      accepted_encryption: [luks2, dm-crypt]
-      expected: all_encrypted
+      assertions:
+        - { field: encryption_at_rest, operator: eq, expected: true }
     allowed_action_classes: [enforce_storage_encryption]
 
   - id: BC-005
     title: SSH password authentication must be disabled
     source: CIS Benchmark for Linux (SSH Server Configuration); CIS Controls v8 (5.2)
-    target_service: jump-host
-    check_type: config_file_value
+    target_service: bastion
+    check_type: status_field
     params:
-      path: /etc/ssh/sshd_config
-      key: PasswordAuthentication
-      expected: "no"
+      config_path: /etc/ssh/sshd_config
+      assertions:
+        - { field: ssh.effective_password_authentication, operator: eq, expected: "no" }
     allowed_action_classes: [change_ssh_policy]
 
   - id: BC-006
-    title: The identity service must enforce account lockout and a minimum password strength
-    source: CIS Controls v8 (5.2); NIST SP 800-53 Rev. 5 (AC-7, IA-5); ISO/IEC 27001:2022 (A.5.17)
-    target_service: identity-svc
-    check_type: auth_policy
+    title: The identity service must enforce a minimum password length and require MFA
+    source: CIS Controls v8 (5.2, 6.5); NIST SP 800-53 Rev. 5 (IA-2(1), IA-5); ISO/IEC 27001:2022 (A.5.17)
+    target_service: identity-service
+    check_type: status_field
     params:
-      endpoint: /api/policy/auth
-      max_failed_attempts: 5
-      min_lockout_seconds: 300
-      min_password_length: 12
-      expected: policy_meets_minimum
+      assertions:
+        - { field: auth_policy.password_min_length, operator: gte, expected: 12 }
+        - { field: auth_policy.mfa_required, operator: eq, expected: true }
     allowed_action_classes: [change_auth_policy]
 
   - id: BC-007
     title: Containers must not run in privileged mode
     source: CIS Docker Benchmark (5.4)
     target_service: "*"
-    check_type: container_inspect
+    check_type: status_field
     params:
-      field: HostConfig.Privileged
-      expected: false
+      assertions:
+        - { field: runtime.privileged, operator: eq, expected: false }
     allowed_action_classes: [remove_privileged_mode]
 
   - id: BC-008
-    title: Database configuration files must not be readable by other users
+    title: Storage configuration files must not be readable by other users
     source: CIS Benchmark for Linux (File Permissions); CIS Controls v8 (3.3)
-    target_service: db-server
-    check_type: file_permissions
+    target_service: storage-service
+    check_type: status_field
     params:
-      path: /etc/appdb/appdb.conf
-      max_mode: "0640"
-      expected_owner: root
+      assertions:
+        - { field: config_file.mode, operator: mode_at_most, expected: "0640" }
+        - { field: config_file.owner, operator: eq, expected: root }
     allowed_action_classes: [restrict_file_permissions]
 
   - id: BC-009
     title: Installed packages must not include known-vulnerable versions
     source: CIS Controls v8 (7.4); NIST SP 800-53 Rev. 5 (SI-2); ISO/IEC 27001:2022 (A.8.8)
-    target_service: web-app
-    check_type: vulnerable_package
+    target_service: vuln-web
+    check_type: status_field
     params:
-      packages:
-        - { name: openssl, min_safe_version: "3.0.13" }
-        - { name: nginx, min_safe_version: "1.24.0" }
-      expected: all_at_or_above_min_safe_version
+      assertions:
+        # Werkzeug < 3.0.6 is affected by CVE-2024-34069 (fixed in 3.0.3) and CVE-2024-49767.
+        - { field: packages.werkzeug, operator: version_gte, expected: "3.0.6" }
     allowed_action_classes: [apply_package_update]
